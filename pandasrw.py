@@ -3,8 +3,11 @@ import pandas as pd
 import polars as pl
 import xlwings as xw
 import datetime
+
+from openpyxl.reader.excel import load_workbook
 from xlsx2csv import Xlsx2csv
 from chardet.universaldetector import UniversalDetector
+
 
 # 将csv转化为utf8编码
 def encode_to_utf8(filename, des_encode):
@@ -15,6 +18,7 @@ def encode_to_utf8(filename, des_encode):
             detector.feed(line)
             if detector.done:
                 break
+        detector.close()
         original_encode = detector.result['encoding']
     # 读取文件的内容
     with open(filename, 'rb') as f:
@@ -37,7 +41,7 @@ def xw_open(file_path, sheetname='Sheet1', visible=False):
     sheet = book.sheets[sheetname]
     data = sheet.used_range.options(pd.DataFrame, header=1, index=False, expand='table').value
     data = data.convert_dtypes()
-    if visible == False:
+    if not visible:
         book.close()
         app.quit()
 
@@ -60,7 +64,7 @@ def xw_write(df, file_path, sheetname='Sheet1', visible=False):
     sheet.range('A1').value = df
     # 保存并关闭Workbook
     wb.save(file_path)
-    if visible == False:
+    if not visible:
         wb.close()
         app.quit()
 
@@ -85,15 +89,16 @@ def xw_write_a(df, file_path, sheetname='Sheet1', cell='A1', visible=False, clos
         wb.close()
         app.quit()
 
+
 ##通过xlwings查看df
 def xw_view(df):
     # 启动Excel程序，不新建工作表薄（否则在创建工作薄时会报错），这时会弹出一个excel
-    app= xw.App(visible = True, add_book= False)
+    app = xw.App(visible=True, add_book=False)
     # 新建一个工作簿，默认sheet为Sheet1
     wb = app.books.add()
     #将工作表赋值给sht变量
     sht = wb.sheets('Sheet1')
-    sht.range('A1').value =df
+    sht.range('A1').value = df
 
 
 ###通过pandas追加写入
@@ -115,16 +120,19 @@ def load_stream_row(file_path, row_count, col_name=None):
     if '.csv' == ext:
         encode_to_utf8(file_path, des_encode="utf-8")
         df_read = pd.read_csv(file_path, usecols=col_name, chunksize=row_count)
-    if ".xls" == ext:
+    elif ".xls" == ext:
         df_read = pd.read_excel(file_path, usecols=col_name)
         # 转化为csv再分块读
         file_path_csv = file_path.replace(".xls", ".csv")
         df_read.to_csv(file_path_csv, index=False, encoding='UTF-8')
         # encode_to_utf8(file_path_csv, des_encode="utf-8")
         df_read = pd.read_csv(file_path_csv, usecols=col_name, chunksize=row_count)
-    if ".xlsx" == ext:
+    elif ".xlsx" == ext:
         file_path_csv = xlsxtocsv(file_path)
         df_read = pd.read_csv(file_path_csv, usecols=col_name, chunksize=row_count)
+    else:
+        print(f"%s 不支持的文件类型。" % file_path)
+        df_read = None
     return df_read
 
 
@@ -136,7 +144,7 @@ def load_excel(file_path, sheetname='Sheet1', start_row=2, end_row=None):
     max_row = ws.max_row
     # [*迭代器]方法性能高于list(迭代器)和逐行取值的方法
     row_columns = [*ws.iter_rows(min_row=1, max_row=1, values_only=True)]
-    if end_row != None:
+    if end_row is not None:
         row_data = [*ws.iter_rows(min_row=start_row, max_row=end_row, values_only=True)]
     else:
         row_data = [*ws.iter_rows(min_row=start_row, max_row=max_row, values_only=True)]
@@ -157,47 +165,63 @@ def load(file_path, col_name=None, sheetname='Sheet1', engine="polars", read_csv
                 encode_to_utf8(file_path, des_encode="utf-8")
                 df_read = pl.read_csv(file_path, columns=col_name)
                 df_read = df_read.to_pandas()
-            if engine == "pandas":
+            elif engine == "pandas":
                 encode_to_utf8(file_path, des_encode="utf-8")
                 df_read = pd.read_csv(file_path, usecols=col_name)
-            if engine == "xlwings":
+            elif engine == "xlwings":
                 # xlwings读取csv兼容性和效率都较差调用pandas读取
                 encode_to_utf8(file_path, des_encode="utf-8")
                 df_read = pd.read_csv(file_path, usecols=col_name)
+            else:
+                print(f"%s 不支持的引擎类型。" % engine)
+                df_read = None
 
-        if ".xlsx" == ext:
+        elif ".xlsx" == ext:
             if engine == "polars":
                 df_read = pl.read_excel(file_path,
-                                        read_csv_options=read_csv_options,
+                                        read_options=read_csv_options,
                                         sheet_name=sheetname)
                 # 删除所有空行
                 df_read = df_read.filter(~pl.all(pl.all().is_null()))
                 df_read = df_read[[s.name for s in df_read if not (s.null_count() == df_read.height)]]
                 df_read = df_read.to_pandas()
-            if engine == "pandas":
+            elif engine == "pandas":
                 df_read = pd.read_excel(file_path, usecols=col_name, sheet_name=sheetname)
-            if engine == "xlwings":
+            elif engine == "xlwings":
                 df_read = xw_open(file_path, sheetname=sheetname, visible=False)
+            else:
+                print(f"%s 不支持的引擎类型。" % engine)
+                df_read = None
 
-        if ".xls" == ext:
+        elif ".xls" == ext:
             if engine == "polars":
                 # polars不能读xls格式，调用pandas解决
                 df_read = pd.read_excel(file_path, usecols=col_name, sheet_name=sheetname)
-            if engine == "pandas":
+            elif engine == "pandas":
                 df_read = pd.read_excel(file_path, usecols=col_name, sheet_name=sheetname)
-            if engine == "xlwings":
+            elif engine == "xlwings":
                 df_read = xw_open(file_path, sheetname=sheetname, visible=False)
+            else:
+                print(f"%s 不支持的引擎类型。" % engine)
+                df_read = None
 
-        if ".pkl" == ext:
+        elif ".pkl" == ext:
             df_read = pd.read_pickle(file_path)
 
+        else:
+            print(f"%s 不支持的文件类型。" % file_path)
+            df_read = None
     except Exception as e:
         if '.csv' == ext:
             encode_to_utf8(file_path, des_encode="utf-8")
             df_read = pd.read_csv(file_path, usecols=col_name)
 
-        if ".xlsx" == ext:
+        elif ".xlsx" == ext:
             df_read = pd.read_excel(file_path, usecols=col_name, sheet_name=sheetname)
+
+        else:
+            print(f"%s 不支持的文件类型。" % file_path)
+            df_read = None
 
         print(f"读取文件发生错误：{e}")
         print(
@@ -221,7 +245,7 @@ def dump(df, file_path, mode=None, sheetname='Sheet1', time=False, engine="polar
         file_path_with_time = f"{base_path}-{timestamp}{ext}"
         file_path = file_path_with_time
     try:
-        if mode == None:
+        if mode is None:
             if '.csv' == ext:
                 if engine == "polars":
                     df = pl.from_pandas(df)
@@ -282,9 +306,10 @@ def dump(df, file_path, mode=None, sheetname='Sheet1', time=False, engine="polar
         print(
             f'已自动切换兼容性更好的pandas引擎。下次写入该文件可以手动选择pandas引擎，语法为dump(file_path,engine="pandas")，对于大文件尝试使用engine="xlwings"。')
 
+
 ##通过excel查看数据，输入参数f既可以是文件路径也可以是DataFrame
 def view(f):
-    if type(f)==str:
+    if type(f) == str:
         xw_open(f, sheetname='Sheet1', visible=True)
     else:
         xw_view(f)
